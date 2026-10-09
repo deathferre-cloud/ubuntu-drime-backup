@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 — 2026-10-09 (prerelease)
+
+- Refresh panel status, progress, ETA and recent errors every 30 seconds without reloading the page.
+- Added a filling countdown ring, loading indicator and last successful page-refresh time in Moscow.
+- Failed reads retain previous data and retry; expired sessions stop polling. Status reads release the PHP session lock before querying the controller, so manual stop requests are not queued behind that lock.
+- Inline JavaScript uses a per-response CSP nonce; refreshes are read-only authenticated GET requests.
+
 ## 0.1.1 — 2026-10-09 (prerelease)
 
 - Recover an ambiguous Drime history move only after verifying the original object ID, exact destination parent/name, and absence of deleted or duplicate entries. Missing proof remains a failure; no history bypass.
