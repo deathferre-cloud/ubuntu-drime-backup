@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Linux integration tests using the real rclone local backend, no production data."""
-import importlib.util,json,os,pathlib,tempfile,time
+import importlib.util,json,os,pathlib,tempfile,time,shutil,stat,subprocess
 
 import daemon as m
 
@@ -23,6 +23,25 @@ with tempfile.TemporaryDirectory(prefix='backup-tests-') as tmp:
     assert open(os.fsencode(root/'cloud')+b'/raw-\xff-name','rb').read()==b'RAW'
     assert (root/'cloud'/'new\nline').read_bytes()==b'NEWLINE'
     assert b.counts['pending_files']==0 and b.counts['pending_directories']==0
+    # Exercise the public manifest format and restore helper against downloaded files.
+    b.manifest()
+    recovery=root/'recovery'
+    shutil.copytree(root/'cloud',recovery,ignore=shutil.ignore_patterns('.ubuntu-drime-backup'))
+    recovered=recovery/'folder'/'same-size.txt'
+    os.chmod(recovered,0o600);os.utime(recovered,ns=(1_000_000_000,1_000_000_000))
+    helper=pathlib.Path(m.__file__).with_name('restore_metadata.py')
+    command=['python3',str(helper),'--root',str(recovery),'--manifest',str(root/'state'/'filesystem.jsonl.gz')]
+    subprocess.run(command,check=True,capture_output=True)
+    assert not (recovery/'symlink').is_symlink(), 'Dry run must not change downloaded descriptors'
+    subprocess.run(command+['--apply'],check=True,capture_output=True)
+    assert (recovery/'symlink').is_symlink() and os.readlink(recovery/'symlink')=='folder/same-size.txt'
+    assert recovered.read_bytes()==b'first'
+    assert stat.S_IMODE(recovered.stat().st_mode)==stat.S_IMODE(file.stat().st_mode)
+    assert recovered.stat().st_uid==file.stat().st_uid and recovered.stat().st_gid==file.stat().st_gid
+    assert recovered.stat().st_mtime_ns==file.stat().st_mtime_ns
+    refused=subprocess.run(['python3',str(helper),'--root','/','--manifest',str(root/'state'/'filesystem.jsonl.gz')],capture_output=True)
+    assert refused.returncode != 0
+    print('RESTORE_ROUNDTRIP_OK: dry run, mode, UID/GID, mtime, file bytes, symlink and live-root rejection',flush=True)
     old=os.stat(file);file.write_bytes(b'other');os.utime(file,ns=(old.st_atime_ns,old.st_mtime_ns))
     b.scan();batch=b.pending();assert len(batch)==1 and batch[0]['path']==b'folder/same-size.txt'
     b.transfer(batch)
