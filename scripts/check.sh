@@ -9,6 +9,7 @@ python3 -m unittest discover -s "$project/tests" -p 'test_control.py' -v
 python3 -m unittest discover -s "$project/tests" -p 'test_progress.py' -v
 python3 -m unittest discover -s "$project/tests" -p 'test_retries.py' -v
 python3 -m unittest discover -s "$project/tests" -p 'test_observer.py' -v
+python3 -m unittest discover -s "$project/tests" -p 'test_incidents.py' -v
 python3 "$project/tests/test_local_integration.py"
 php -l "$project/src/control.php"
 python3 -m compileall -q "$project/src" "$project/scripts"

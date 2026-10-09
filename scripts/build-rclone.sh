@@ -30,10 +30,10 @@ python3 "$project/rclone-patches/apply-listing-cache.py" "$build/rclone-1.75.1"
 export GOROOT="$build/go" GOPATH="$build/gopath" GOCACHE="$build/gocache"
 export PATH="$GOROOT/bin:$PATH" GOMAXPROCS=2 GOMEMLIMIT=768MiB
 cd "$build/rclone-1.75.1"
-gofmt -w backend/drime/drime.go backend/drime/listing_cache*.go backend/drime/folder_conflict*.go
+gofmt -w backend/drime/drime.go backend/drime/listing_cache*.go backend/drime/folder_conflict*.go backend/drime/move_recovery*.go
 CGO_ENABLED=1 go test -race -p 2 -count=1 -run '^TestUbuntuDrime' ./backend/drime
 CGO_ENABLED=0 go build -p 2 -trimpath \
-  -ldflags '-s -w -X github.com/rclone/rclone/fs.Version=v1.75.1-ubuntu-drime.1' \
+  -ldflags '-s -w -X github.com/rclone/rclone/fs.Version=v1.75.1-ubuntu-drime.2' \
   -o "$output/rclone-fast" .
 "$output/rclone-fast" version
 sha256sum "$output/rclone-fast"

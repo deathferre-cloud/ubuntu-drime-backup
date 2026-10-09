@@ -26,7 +26,10 @@ replace('\t\treturn nil, fmt.Errorf("failed to create folder: %w", err)', '''   
             return nil, fmt.Errorf("failed to create folder parent=%q name=%q: %w; recovery lookup: %v", pathID, leaf, err, lookupErr)
         }
         return nil, fmt.Errorf("failed to create folder parent=%q name=%q: %w", pathID, leaf, err)''')
+replace('	// Now rename the leaf to a temporary name', '	movedLeaf := srcLeaf\n	// Now rename the leaf to a temporary name')
+replace('		tmpLeaf := newLeaf + "." + random.String(8)', '		tmpLeaf := newLeaf + "." + random.String(8)\n		movedLeaf = f.opt.Enc.ToStandardName(tmpLeaf)')
+replace('		err = f.move(ctx, id, dstDirectoryID)', '		err = f.moveVerified(ctx, id, dstDirectoryID, movedLeaf)')
 p.write_text(s)
-for name in ('listing_cache.go','listing_cache_test.go','folder_conflict.go','folder_conflict_test.go'):
+for name in ('listing_cache.go','listing_cache_test.go','folder_conflict.go','folder_conflict_test.go','move_recovery.go','move_recovery_test.go'):
     (root/'backend/drime'/name).write_bytes((pathlib.Path(__file__).parent/name).read_bytes())
 print('LISTING_CACHE_PATCH_APPLIED')

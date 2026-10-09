@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 — 2026-10-09 (prerelease)
+
+- Recover an ambiguous Drime history move only after verifying the original object ID, exact destination parent/name, and absence of deleted or duplicate entries. Missing proof remains a failure; no history bypass.
+- Correlate transfer errors and batch summaries with durable SQLite incident membership. A batch closes only after each of its files has a confirmed stable upload, including after process restarts. Later ordinary source changes do not reopen a resolved historical incident.
+- Explain `No valid entries to move` in the panel and recognize exact paths in `Couldn't move` errors.
+- Reject stale database rows when recording upload confirmations.
+- Added real HTTP move fault injection and incident regressions. Day/night stop limits and file-retention behavior are unchanged.
+
 ## 0.1.0 — 2026-10-09 (prerelease)
 
 - First public source release, extracted into independent service paths and configuration templates.

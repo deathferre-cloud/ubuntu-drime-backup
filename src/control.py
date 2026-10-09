@@ -72,6 +72,11 @@ def explain_error(message):
     if 'cloud activity exceeded' in text or 'cloud_observation_gap' in text:
         return ('Между проверками в Drime появилось больше событий, чем помещается на одной странице журнала. Служба не может гарантировать, '
                 'что увидела все предупреждения. Днём она останавливается, ночью продолжает с записью о пропуске. Нужно проверить журнал Drime и частоту опроса.')
+    if 'no valid entries to move' in text:
+        return ('Drime не подтвердил перенос предыдущей облачной версии файла в историю. Иногда перенос уже выполнен, '
+                'но ответ потерян и повторный запрос возвращает эту ошибку. Клиент проверяет исходный ID файла в точной папке назначения; '
+                'только это подтверждает выполненный перенос. Если подтверждения нет, текущий файл остаётся в очереди; '
+                'обходить сохранение истории или считать такой ответ успешным без проверки нельзя.')
     if 'cloud_alert' in text or 'alert_malware_' in text or 'alert_ransomware_' in text:
         return ('В Drime сработало правило безопасности. По одной этой записи нельзя утверждать, что сервер заражён: правило может реагировать на расширения файлов. '
                 'Откройте журнал активности Ubuntu Drime Backup, проверьте имя файла и условие правила. Подозрительный файл требует отдельной проверки.')
@@ -151,7 +156,7 @@ def error_file(message):
         try: path=base64.b64decode(match[1],validate=True)
         except (ValueError,binascii.Error): return None
     else:
-        match=re.search(r'(?:\bWARNING rclone (?:error|fatal) |\b(?:DAY|NIGHT) error: rclone_error: )([^:\n]+): Failed to (?:copy|open|read|upload)\b',message)
+        match=re.search(r'(?:\bWARNING rclone (?:error|fatal) |\b(?:DAY|NIGHT) error: rclone_error: )([^:\n]+): (?:Failed to (?:copy|open|read|upload)|Couldn\x27t move)\b',message)
         if not match: return None
         # Non-ASCII log object encoding can be ambiguous; require exact Base64 instead.
         if any(ord(c)<32 or ord(c)>126 for c in match[1]): return None
@@ -192,6 +197,22 @@ class ErrorResolutions:
                 return dict(resolved=True,label='Исправлена',
                     detail='Подтверждено при разборе '+moscow_time(reviewed_at)+' МСК. '+sanitize(reason))
         except (ValueError,TypeError,AttributeError): pass
+        incident=re.search(r'\[incident_id=([0-9a-f]{32})\]',message)
+        if incident:
+            try:
+                if self.db is None:
+                    self.db=sqlite3.connect((ROOT/'journal.sqlite3').as_uri()+'?mode=ro',uri=True,timeout=1)
+                    self.db.execute('PRAGMA query_only=ON')
+                row=self.db.execute('SELECT resolved_at,error FROM transfer_incidents WHERE id=?',(incident[1],)).fetchone()
+                total,remaining=self.db.execute('SELECT COUNT(*),SUM(resolved_at IS NULL) FROM incident_files WHERE incident_id=?',(incident[1],)).fetchone()
+                if row and row[1] and total and not remaining and row[0]:
+                    return dict(resolved=True,label='Исправлена',detail='Повтор этой пачки подтверждён '+moscow_time(iso_microseconds(row[0]))+
+                        ' МСК. Все её файлы получили подтверждение отправки. Новые изменения файлов учитываются отдельно.')
+                pending['detail']='У этой записи есть связь с конкретной пачкой. Подтверждения ожидают: '+str(remaining if total else 'проверка продолжается')+'. Успех другой пачки её не закрывает.'
+                return pending
+            except (OSError,sqlite3.Error,ValueError,TypeError,AttributeError):
+                pending['detail']='Связь с пачкой записана, но проверить её подтверждения сейчас не удалось.'
+                return pending
         path=error_file(message)
         if path is None:
             pending['detail']='В записи нет однозначного имени файла, а отдельного подтверждения исправления нет. Успех другой передачи или перезапуск её не закрывает.'

@@ -46,3 +46,5 @@ The authenticated web panel is currently in Russian. It runs through a restricte
 Use one writer per destination tree. Never treat an active process, a sample hash match, or a green historical error as proof that the entire first backup is complete. Check `initial_copy_complete`, the remaining queue and a restore into a separate directory. Versions are retained without automatic pruning.
 
 MIT license; rclone attribution and its MIT license are included in `NOTICE` and `licenses/`.
+
+Version 0.1.1 verifies an ambiguous history move by the original object ID in the exact destination before continuing. Durable incident membership links error summaries to actual upload confirmations, including across restarts; unrelated successful uploads never resolve another batch. See the operations guide for the migration and verification details.

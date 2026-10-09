@@ -70,6 +70,13 @@ class Backup:
             last_error TEXT, uploaded_at TEXT);
           CREATE INDEX IF NOT EXISTS pending ON entries(present,kind,retry_at);
           CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+          CREATE TABLE IF NOT EXISTS transfer_incidents (
+            id TEXT PRIMARY KEY, created_at TEXT, error TEXT, resolved_at TEXT);
+          CREATE TABLE IF NOT EXISTS incident_files (
+            incident_id TEXT, path BLOB, kind TEXT, sig TEXT, resolved_at TEXT,
+            PRIMARY KEY(incident_id,path));
+          CREATE INDEX IF NOT EXISTS incident_pending_path ON incident_files(path,kind)
+            WHERE resolved_at IS NULL;
         ''')
         self.phase = 'starting'
         self.active = None
@@ -112,11 +119,12 @@ class Backup:
         except ProcessLookupError: pass
         process.wait()
 
-    def rc(self, *args, capture=False, on_event=None):
+    def rc(self, *args, capture=False, on_event=None, incident_id=None):
         if capture and on_event: raise ValueError('Event capture cannot capture file data')
         self.guard.poll(force=True)
         command=self.command(*args)+['--use-json-log','--retries','1']
         command_id=str(uuid.uuid4()); seen_errors=set(); buffer=b''
+        incident_suffix=' [incident_id='+incident_id+']' if incident_id else ''
         started=last_progress=time.monotonic(); progress=None
         def event_line(line):
             nonlocal last_progress,progress
@@ -136,9 +144,9 @@ class Backup:
                     key=event.get('object') or msg
                     if key not in seen_errors:
                         seen_errors.add(key)
-                        self.guard.record('rclone_error',str(event.get('object',''))+': '+msg,command_id+':'+key)
+                        self.guard.record('rclone_error',str(event.get('object',''))+': '+msg+incident_suffix,command_id+':'+key)
             if level in ('error','fatal','warning'):
-                LOG.warning('rclone %s %s: %s',level,event.get('object',''),sanitize(msg))
+                LOG.warning('rclone %s %s: %s%s',level,event.get('object',''),sanitize(msg),incident_suffix)
             elif 'stats' in event: LOG.info('rclone: %s',msg.strip())
         with tempfile.TemporaryFile() as output:
             with subprocess.Popen(command,stderr=subprocess.PIPE,stdout=output if capture else None,start_new_session=True) as p:
@@ -191,6 +199,28 @@ class Backup:
                 raise RecordedError('rclone exit code '+str(p.returncode))
             if capture: output.seek(0);return output.read()
 
+    def begin_incident(self, batch):
+        incident=uuid.uuid4().hex
+        self.db.execute('INSERT INTO transfer_incidents(id,created_at) VALUES (?,?)',(incident,utc()))
+        self.db.executemany('INSERT INTO incident_files(incident_id,path,kind,sig) VALUES (?,?,?,?)',
+            [(incident,row['path'],row['kind'],row['sig']) for row in batch])
+        self.db.commit()
+        return incident
+
+    def resolve_incidents(self):
+        self.db.execute("""UPDATE transfer_incidents SET resolved_at=?
+            WHERE error IS NOT NULL AND resolved_at IS NULL AND NOT EXISTS
+            (SELECT 1 FROM incident_files WHERE incident_id=transfer_incidents.id AND resolved_at IS NULL)""",(utc(),))
+
+    def finish_incident(self, incident, error=None):
+        if error is None:
+            self.db.execute('DELETE FROM incident_files WHERE incident_id=?',(incident,))
+            self.db.execute('DELETE FROM transfer_incidents WHERE id=?',(incident,))
+        else:
+            self.db.execute('UPDATE transfer_incidents SET error=? WHERE id=?',(sanitize(error),incident))
+            self.resolve_incidents()
+        self.db.commit()
+
     def checkpoint(self,row):
         try: current=signature(os.lstat(os.path.join(self.source,row['path'])))
         except FileNotFoundError: current=None
@@ -198,13 +228,18 @@ class Backup:
             self.db.execute("UPDATE entries SET uploaded='' WHERE path=? AND sig=? AND uploaded=?",
                             (row['path'],row['sig'],row['sig']))
             return False
-        self.db.execute('''UPDATE entries SET uploaded=?,uploaded_at=?,failures=0,
+        updated=self.db.execute('''UPDATE entries SET uploaded=?,uploaded_at=?,failures=0,
             retry_at=0,last_error=NULL WHERE path=? AND sig=?''',
             (row['sig'],utc(),row['path'],row['sig']))
+        if not updated.rowcount: return False
+        self.db.execute('UPDATE incident_files SET resolved_at=? WHERE path=? AND kind=? AND resolved_at IS NULL',
+            (utc(),row['path'],row['kind']))
         parent=os.path.dirname(row['path'])
         while parent and parent!=b'.':
             self.db.execute("UPDATE entries SET uploaded=sig,last_error=NULL WHERE path=? AND kind='dir'",(parent,))
+            self.db.execute("UPDATE incident_files SET resolved_at=? WHERE path=? AND kind='dir' AND resolved_at IS NULL",(utc(),parent))
             parent=os.path.dirname(parent)
+        self.resolve_incidents()
         return True
 
     def transfer_event(self,event,rows):
@@ -437,6 +472,7 @@ class Backup:
                 stream.write(row['path']+b'\0')
         stamp=dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:8]
         rows={row['path']:row for row in batch}
+        incident=self.begin_incident(batch)
         try:
             self.rc('copy',os.fsdecode(upload_source),self.c['destination'],
                 '--copy-links','--ignore-times','--create-empty-src-dirs',
@@ -444,8 +480,9 @@ class Backup:
                 '--backup-dir',self.c['history']+'/'+stamp+os.fsdecode(self.source),
                 '--transfers',str(transfers),'--checkers',str(transfers),
                 '--log-level','INFO','--stats','60s','--stats-log-level','NOTICE','--stats-one-line',
-                on_event=lambda event:self.transfer_event(event,rows))
-        except SafetyStop:
+                on_event=lambda event:self.transfer_event(event,rows),incident_id=incident)
+        except SafetyStop as e:
+            self.finish_incident(incident,e)
             raise
         except Exception as e:
             self.last_operation_error=str(e)
@@ -458,14 +495,14 @@ class Backup:
                 self.db.execute('UPDATE entries SET failures=?,retry_at=?,last_error=COALESCE(last_error,?) WHERE path=?',
                     (failures,time.time()+min(3600,60*2**min(failures,6))+random.uniform(0,15),sanitize(e),row['path']))
             if batch:
-                LOG.error('Operation failed; %d unconfirmed files retained for retry: %s',len(batch),sanitize(e))
+                LOG.error('Operation failed; %d unconfirmed files retained for retry: %s [incident_id=%s]',len(batch),sanitize(e),incident)
             else:
-                LOG.error('Operation failed after all batch files were individually confirmed; no file re-upload scheduled: %s',sanitize(e))
-            self.db.commit()
+                LOG.error('Operation failed after all batch files were individually confirmed; no file re-upload scheduled: %s [incident_id=%s]',sanitize(e),incident)
+            self.finish_incident(incident,e)
         else:
             for row in batch:
                 self.checkpoint(row)
-            self.db.commit()
+            self.finish_incident(incident)
             self.last_operation_error=None
             LOG.info('Completed batch: %d files, %d bytes',len(batch),sum(r['size'] for r in batch))
         self.active=None
