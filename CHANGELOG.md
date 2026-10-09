@@ -11,3 +11,6 @@
 - Russian operations/restore documentation and English overview.
 
 Known limits: fixed Moscow day/night boundaries, Russian web UI, x86_64 build recipe, no atomic live-system snapshot, no database dump generation, no automatic history pruning, and no claim of completed full-server restore qualification.
+
+- Added bounded observer API retries with daytime process pause/resume and transport timing diagnostics; exhausted requests still count toward the durable safety limit.
+- Fixed a panel explanation that misread 510 unconfirmed files as zero; added coverage for nonzero counts.

@@ -115,10 +115,21 @@ def explain_error(message):
     if any(word in text for word in ('process crashed','service terminated','main process exited','failed with result')):
         return ('Процесс завершился аварийно либо с ошибкой. Эта запись фиксирует остановку, но не всегда объясняет её причину. '
                 'Смотрите предыдущие ошибки и системный журнал; ночью предусмотрен перезапуск, днём сохраняется аварийная блокировка.')
-    if '0 unconfirmed files retained' in text or 'all batch files were individually confirmed' in text:
+    if re.search(r'(?<![\d])0 unconfirmed files retained',text) or 'all batch files were individually confirmed' in text:
         return ('Команда завершилась с ошибкой, но все файлы этой пачки уже получили отдельные подтверждения успешной отправки. '
                 'Повторная загрузка этих файлов не требуется. Соседняя подробная запись объясняет сбой служебной операции, например чтения каталога; '
                 'он остаётся в дневном счётчике до разбора.')
+    pending=re.search(r'\boperation failed;\s*(\d+) unconfirmed files retained',text)
+    if pending:
+        cause=(' Причиной было чтение предупреждений Drime, а не установленная ошибка содержимого этих файлов.'
+               if 'cloud alert observer unavailable' in text else '')
+        return ('Пачка прервана: '+pending[1]+' файлов пока не получили подтверждения успешной отправки. '
+                'Они сохранены в очереди для повтора; уже подтверждённые файлы не отменены.'+cause+
+                ' Эта запись не означает, что все перечисленные файлы повреждены или потеряны.')
+    if 'cycle paused after error; durable budget' in text:
+        return ('Цикл временно прерван после ошибки, уже учтённой в дневном счётчике. Подробная причина находится в соседней записи журнала. '
+                'Через минуту служба повторяет попытку; при достижении дневного порога сохраняется блокировка до ручного разбора. '
+                'Эта итоговая строка не добавляет ещё одну ошибку в счётчик.')
     if 'rclone exit code' in text or 'attempt ' in text and 'failed' in text:
         return ('Это итог неудачной команды копирования. Один код завершения или итоговый счётчик не объясняет причину. '
                 'Найдите рядом более подробную строку с именем файла и описанием сбоя. Уже подтверждённые файлы остаются в журнале, остальные ожидают повтора.')
@@ -274,7 +285,10 @@ def dispatch(request):
             if result.returncode: raise RuntimeError('Cannot finish previous service run')
             with (ROOT/'daemon.lock').open('a') as daemon_lock:
                 fcntl.flock(daemon_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                guard=SafetyGuard(json.loads(CONFIG.read_text()))
+                # The web request must remain bounded; daemon retries use the full profile.
+                config=json.loads(CONFIG.read_text())
+                config.update(cloud_guard_attempts=1,cloud_guard_connect_timeout=5,cloud_guard_timeout=10)
+                guard=SafetyGuard(config)
                 guard.end_run()  # Unit stopped and process lock acquired.
                 guard.reset('Explicit operator restart through authenticated web control')
             systemctl('reset-failed')

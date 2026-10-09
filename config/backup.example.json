@@ -70,5 +70,10 @@
     "dll"
   ],
   "cloud_guard_actor_email": "backup-owner@example.com",
-  "cloud_guard_max_pages": 20
+  "cloud_guard_max_pages": 20,
+  "cloud_guard_attempts": 3,
+  "cloud_guard_connect_timeout": 10,
+  "cloud_guard_timeout": 20,
+  "cloud_guard_retry_timeout": 45,
+  "cloud_guard_retry_delay": 2
 }

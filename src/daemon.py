@@ -144,9 +144,27 @@ class Backup:
             with subprocess.Popen(command,stderr=subprocess.PIPE,stdout=output if capture else None,start_new_session=True) as p:
                 with selectors.DefaultSelector() as selector:
                     selector.register(p.stderr,selectors.EVENT_READ)
+                    previous_retry_hook=self.guard.on_api_retry
+                    paused_at=None; phase_before_pause=None
+                    def pause_for_observer():
+                        nonlocal paused_at,phase_before_pause
+                        if paused_at is not None or not self.guard.daytime() or p.poll() is not None:return
+                        try:os.killpg(p.pid,signal.SIGSTOP)
+                        except ProcessLookupError:return
+                        paused_at=time.monotonic();phase_before_pause=self.phase
+                        self.phase='waiting_cloud_observer';self.status()
+                        LOG.info('Upload process paused while the Drime observer retries; keeping the current batch')
+                    self.guard.on_api_retry=pause_for_observer
                     try:
                         while selector.get_map() or p.poll() is None:
                             self.guard.poll()
+                            if paused_at is not None:
+                                held=time.monotonic()-paused_at
+                                try:os.killpg(p.pid,signal.SIGCONT)
+                                except ProcessLookupError:pass
+                                started+=held;last_progress+=held
+                                self.phase=phase_before_pause;paused_at=None;self.status()
+                                LOG.info('Upload process resumed after observer recovery; same batch retained')
                             if time.monotonic()-started>self.c.get('command_timeout_seconds',3600):
                                 self.guard.trip('Rclone exceeded maximum command duration')
                             if time.monotonic()-last_progress>self.c.get('stall_timeout_seconds',600):
@@ -164,6 +182,9 @@ class Backup:
                         p.wait()
                     except BaseException:
                         self.kill_group(p);raise
+                    finally:
+                        self.guard.on_api_retry=previous_retry_hook
+                        if paused_at is not None:self.phase=phase_before_pause
             if p.returncode<0: self.guard.trip('Rclone process crashed with signal '+str(-p.returncode))
             if p.returncode:
                 if not seen_errors: self.guard.record('rclone_exit','rclone exit code '+str(p.returncode),command_id)

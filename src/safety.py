@@ -6,6 +6,7 @@ import datetime as dt
 import fcntl
 import json
 import logging
+import math
 import os
 import pathlib
 import re
@@ -60,6 +61,7 @@ class SafetyGuard:
         self.data = dict(version=1, count=0, events=[], status='armed', activity_cursor=None, epoch=str(uuid.uuid4()))
         self.next_poll = 0
         self.next_policy_check = 0
+        self.on_api_retry = None
         self.policies = ('ransomware_suspected', 'malware_shared_by_team_member')
         if self.path.exists():
             try:
@@ -117,23 +119,53 @@ class SafetyGuard:
         return result
 
     def api(self, path):
-        config = configparser.ConfigParser()
+        config = configparser.ConfigParser(interpolation=None)
         config.read(self.c['rclone_config'])
         remote = self.c['destination'].split(':',1)[0]
         token = config[remote]['access_token']
         workspace = int(self.c['cloud_guard_workspace'])
         if int(config[remote]['workspace_id']) != workspace:
             self.trip('Cloud guard workspace does not match upload workspace')
+        attempts=int(self.c.get('cloud_guard_attempts',3))
+        connect=float(self.c.get('cloud_guard_connect_timeout',10))
+        first=float(self.c.get('cloud_guard_timeout',20))
+        retry=float(self.c.get('cloud_guard_retry_timeout',45))
+        delay=float(self.c.get('cloud_guard_retry_delay',2))
+        if not 1<=attempts<=5 or not 0<connect<=120 or not 0<first<=120 or not 0<retry<=120 or not 0<=delay<=10:
+            raise ValueError('Invalid bounded cloud guard transport settings')
         prefix = [self.c['network_wrapper']] if self.c.get('network_wrapper') else []
-        command = prefix+['curl','-4','--http1.1','--silent','--show-error','--compressed',
-            '--connect-timeout','3','--max-time','7','--config','-',
-            '--write-out','\nSTATUS:%{http_code}',f'https://app.drime.cloud/api/v1/workspace/{workspace}/'+path]
-        result = subprocess.run(command, input='header = "Authorization: Bearer '+token+'"\nheader = "Accept: application/json"\n',
-                                text=True, capture_output=True, timeout=10)
-        body, _, status = result.stdout.rpartition('\nSTATUS:')
-        if result.returncode or status != '200':
-            raise RuntimeError('Drime safety API unavailable: HTTP '+status+' curl='+str(result.returncode))
-        return json.loads(body)
+        logger=logging.getLogger('ubuntu-drime-backup')
+        for attempt in range(attempts):
+            timeout=first if attempt==0 else retry
+            command = prefix+['curl','-4','--http1.1','--silent','--show-error','--compressed',
+                '--connect-timeout',str(math.ceil(connect)),'--max-time',str(math.ceil(timeout)),'--config','-',
+                '--write-out','\nSTATUS:%{http_code}\nTIMING:%{time_namelookup},%{time_connect},%{time_appconnect},%{time_starttransfer},%{time_total}',
+                f'https://app.drime.cloud/api/v1/workspace/{workspace}/'+path]
+            try:
+                result = subprocess.run(command, input='header = '+json.dumps('Authorization: Bearer '+token)+'\nheader = "Accept: application/json"\n',
+                                        text=True, capture_output=True, timeout=timeout+5)
+                body, _, footer = result.stdout.rpartition('\nSTATUS:')
+                status, _, metrics = footer.partition('\nTIMING:')
+                code=result.returncode
+            except subprocess.TimeoutExpired:
+                body,status,metrics,code='','000','',28
+            if code==0 and status=='200':
+                payload=json.loads(body)
+                if attempt:logger.info('Drime observer API recovered after %d attempts: %s',attempt+1,path.split('?')[0])
+                return payload
+            timings=[]
+            try:timings=[round(float(x),3) for x in metrics.split(',')] if metrics else []
+            except ValueError:pass
+            reason=('Drime safety API unavailable: HTTP '+status+' curl='+str(code)+
+                    ' endpoint='+path.split('?')[0]+' attempt='+str(attempt+1)+'/'+str(attempts)+
+                    ' dns_connect_tls_firstbyte_total='+str(timings))
+            transient=code in (5,6,7,18,28,35,52,55,56,92) or (code==0 and status in ('408','425','429','500','502','503','504'))
+            if not transient or attempt+1==attempts:raise RuntimeError(reason)
+            # Pause an existing daytime upload before the bounded recovery attempts.
+            # Actual alerts and exhausted requests are still counted by poll().
+            if self.on_api_retry is not None:self.on_api_retry()
+            logger.info('Retrying transient Drime observer request: %s',reason)
+            time.sleep(delay)
 
     def validate_policies(self):
         data = self.api('alert-policies')
@@ -204,7 +236,6 @@ class SafetyGuard:
         self.check()
         if not self.c.get('cloud_guard_workspace'): return
         if not force and time.monotonic() < self.next_poll: return
-        self.next_poll = time.monotonic()+float(self.c.get('cloud_guard_poll_seconds',5))
         try:
             if time.monotonic() >= self.next_policy_check: self.validate_policies()
             self.ingest_activity(self.activity_since_cursor())
@@ -215,6 +246,9 @@ class SafetyGuard:
             self.record('guard_api_error',str(error))
             if self.daytime():
                 raise RecordedError('Cloud alert observer unavailable; uploads paused') from error
+        finally:
+            # A slow successful request must not trigger an immediate extra poll.
+            self.next_poll = time.monotonic()+float(self.c.get('cloud_guard_poll_seconds',5))
 
     def begin_run(self):
         self.check()

@@ -29,6 +29,19 @@ class ControlTests(unittest.TestCase):
                 self.assertTrue(control.dispatch({'key':key,'action':'status'})['ok'])
                 command.assert_not_called()
 
+    def test_web_start_keeps_short_read_only_preflight_budget(self):
+        key='d'*64;auth=control.ROOT/'auth.json';config=control.ROOT/'config.json'
+        auth.write_text(json.dumps({'key_sha256':hashlib.sha256(key.encode()).hexdigest()}))
+        config.write_text(json.dumps({'cloud_guard_attempts':3,'cloud_guard_timeout':20}))
+        with patch.object(control,'AUTH',auth),patch.object(control,'CONFIG',config),patch.object(control,'SafetyGuard') as guard, \
+             patch.object(control,'status',return_value={'service':{'ActiveState':'inactive'}}), \
+             patch.object(control,'systemctl',return_value=subprocess.CompletedProcess([],0,'','')):
+            self.assertTrue(control.dispatch({'key':key,'action':'start'})['ok'])
+            settings=guard.call_args.args[0]
+            self.assertEqual(settings['cloud_guard_attempts'],1);self.assertEqual(settings['cloud_guard_timeout'],10)
+            guard.return_value.reset.assert_called_once()
+        self.assertEqual(json.loads(config.read_text())['cloud_guard_attempts'],3)
+
     def test_stop_latches_before_systemctl_and_keeps_latch_on_failure(self):
         with tempfile.TemporaryDirectory() as root:
             root=pathlib.Path(root);key='a'*64;auth=root/'auth.json'
@@ -87,6 +100,14 @@ class ControlTests(unittest.TestCase):
         for text in ('Operation failed; 0 unconfirmed files retained for retry: rclone exit code 5',
                      'Operation failed after all batch files were individually confirmed; no file re-upload scheduled: rclone exit code 5'):
             self.assertIn('Повторная загрузка этих файлов не требуется',control.explain_error(text))
+
+    def test_nonzero_batch_counts_never_claim_all_files_confirmed(self):
+        for count in (1,10,100,510,1000):
+            text=control.explain_error('ERROR Operation failed; '+str(count)+' unconfirmed files retained for retry: Cloud alert observer unavailable; uploads paused')
+            self.assertIn(str(count)+' файлов пока не получили подтверждения',text)
+            self.assertNotIn('Повторная загрузка этих файлов не требуется',text)
+            self.assertIn('чтение предупреждений Drime',text)
+        self.assertIn('уже учтённой',control.explain_error('ERROR Cycle paused after error; durable budget 3/5'))
 
     def test_resolved_file_requires_later_success_and_no_pending_or_error(self):
         path=b'home/user/file.txt';stamp=control.iso_microseconds('2026-10-09T00:00:00+00:00')
