@@ -6,7 +6,17 @@ output=${1:-"$project/dist"}
 mkdir -p -- "$output"
 output=$(cd -- "$output" && pwd)
 build=$(mktemp -d "${TMPDIR:-/tmp}/ubuntu-drime-build.XXXXXXXX")
-cleanup() { case "$build" in /*/ubuntu-drime-build.*) rm -rf -- "$build";; *) exit 1;; esac; }
+cleanup() {
+  case "$build" in
+    /*/ubuntu-drime-build.*)
+      # Go module directories are read-only even when owned by the builder.
+      # Do not follow symlinks or modify any shared/global Go cache.
+      find "$build" -depth -type d -exec chmod u+w -- {} +
+      rm -rf -- "$build"
+      ;;
+    *) echo 'Refusing unsafe build-directory cleanup.' >&2; return 1;;
+  esac
+}
 trap cleanup EXIT
 curl -fL --retry 3 --connect-timeout 20 --max-time 600 \
   https://go.dev/dl/go1.27.2.linux-amd64.tar.gz -o "$build/go.tgz"
