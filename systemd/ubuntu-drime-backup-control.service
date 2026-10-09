@@ -1,0 +1,29 @@
+[Unit]
+Description=Ubuntu Drime Backup authenticated backup control socket
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=www-data
+ExecStart=/usr/bin/python3 -u /opt/ubuntu-drime-backup/control.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=ubuntu-drime-backup-control
+RuntimeDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ubuntu-drime-backup /run/ubuntu-drime-backup-control
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+MemoryMax=192M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

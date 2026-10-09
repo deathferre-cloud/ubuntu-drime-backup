@@ -1,0 +1,9 @@
+#!/bin/sh
+# Private mount namespace for rclone's DNS; the daemon sees original host files.
+set -eu
+if [ "${1-}" != '--inside-private-mount' ]; then
+    exec /usr/bin/unshare --mount --propagation private "$0" --inside-private-mount "$@"
+fi
+shift
+/bin/mount --bind /etc/ubuntu-drime-backup/resolv-rclone.conf /etc/resolv.conf
+exec "$@"

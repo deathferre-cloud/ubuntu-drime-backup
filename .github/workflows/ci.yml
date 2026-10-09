@@ -1,0 +1,19 @@
+name: Tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned rclone and test backend patches
+        run: bash scripts/build-rclone.sh
+      - name: Python, HTTP fault injection, local integration and PHP
+        run: bash scripts/check.sh
+      - name: Fresh installation and authenticated control socket (disposable runner)
+        run: sudo env UBUNTU_DRIME_TEST_DISPOSABLE=1 bash tests/test_installation.sh

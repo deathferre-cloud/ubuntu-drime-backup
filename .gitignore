@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+.env
+.secrets/
+backup.json
+rclone.conf
+control-auth.json
+control-url.txt
+*.sqlite3*
+*.log

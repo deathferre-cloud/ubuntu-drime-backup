@@ -1,0 +1,44 @@
+[Unit]
+Description=Ubuntu Drime Backup continuous server file backup to Drime
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+ConditionPathExists=!/var/lib/ubuntu-drime-backup/SAFETY_STOP.json
+ConditionPathExists=!/var/lib/ubuntu-drime-backup/MANUAL_STOP.json
+
+[Service]
+Type=simple
+NotifyAccess=main
+User=root
+Environment=TZ=Europe/Moscow
+ExecStart=/usr/bin/python3 -u /opt/ubuntu-drime-backup/daemon.py --config /etc/ubuntu-drime-backup/backup.json
+ExecStartPre=/usr/bin/python3 /opt/ubuntu-drime-backup/safety.py check --config /etc/ubuntu-drime-backup/backup.json
+ExecStopPost=/usr/bin/python3 /opt/ubuntu-drime-backup/safety.py service-stop --config /etc/ubuntu-drime-backup/backup.json
+Restart=on-failure
+RestartSec=60
+RestartPreventExitStatus=78
+TimeoutStopSec=45
+KillMode=control-group
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20
+IOWeight=20
+MemoryHigh=768M
+MemoryMax=1536M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/opt/ubuntu-drime-backup
+ReadWritePaths=/var/lib/ubuntu-drime-backup
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ubuntu-drime-backup
+
+[Install]
+WantedBy=multi-user.target

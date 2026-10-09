@@ -1,0 +1,13 @@
+# Include this location in an EXISTING HTTPS server block for a dedicated host.
+# Adjust the PHP-FPM socket to the installed version. Do not expose over HTTP.
+location = /backup-control.php {
+    access_log off;
+    error_log /dev/null crit;
+    ssi off;
+    client_max_body_size 4k;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /opt/ubuntu-drime-backup/control.php;
+    fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+    fastcgi_read_timeout 90s;
+}
+location ^~ /backup-control.php/ { return 404; }
