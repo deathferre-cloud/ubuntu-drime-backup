@@ -1,3 +1,4 @@
-nameserver 9.9.9.9
-nameserver 149.112.112.112
-options timeout:2 attempts:2
+# Optional private resolver profile. Check reachability from your own server.
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+options use-vc timeout:2 attempts:2

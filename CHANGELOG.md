@@ -14,3 +14,5 @@ Known limits: fixed Moscow day/night boundaries, Russian web UI, x86_64 build re
 
 - Added bounded observer API retries with daytime process pause/resume and transport timing diagnostics; exhausted requests still count toward the durable safety limit.
 - Fixed a panel explanation that misread 510 unconfirmed files as zero; added coverage for nonzero counts.
+
+- Documented and supplied an optional TCP DNS profile for environments with unreliable UDP resolution; the system resolver is unchanged.
