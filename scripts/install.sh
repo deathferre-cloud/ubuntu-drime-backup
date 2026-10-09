@@ -6,7 +6,7 @@ set -euo pipefail
 project=$(cd -- "$(dirname -- "$0")/.." && pwd)
 binary=$(readlink -f -- "$2")
 [ -x "$binary" ] || { echo 'Built rclone executable not found.' >&2; exit 1; }
-"$binary" version | grep -F 'v1.75.1-ubuntu-drime.1' >/dev/null || { echo 'Build the pinned client with scripts/build-rclone.sh first.' >&2; exit 1; }
+"$binary" version | grep -F 'v1.75.1-ubuntu-drime.2' >/dev/null || { echo 'Build the pinned client with scripts/build-rclone.sh first.' >&2; exit 1; }
 for unit in ubuntu-drime-backup ubuntu-drime-backup-control; do
   if systemctl is-active --quiet "$unit"; then
     echo "Stop $unit before updating its files." >&2; exit 1

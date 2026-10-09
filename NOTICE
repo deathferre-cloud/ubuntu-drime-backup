@@ -5,7 +5,7 @@ The project uses rclone v1.75.1, licensed under the MIT license.
 Its license and attribution are reproduced in licenses/rclone-MIT.txt.
 The rclone-patches directory modifies the upstream Drime backend and adds tests.
 scripts/build-rclone.sh fetches the pinned upstream source and applies those
-changes. The generated client is identified as v1.75.1-ubuntu-drime.1.
+changes. The generated client is identified as v1.75.1-ubuntu-drime.2.
 
 Go and rclone dependencies retain their respective upstream licenses.
 This source release does not bundle the Go toolchain or upstream dependency

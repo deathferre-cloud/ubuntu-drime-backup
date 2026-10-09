@@ -4,7 +4,7 @@ Continuous, one-way Ubuntu file backup to **Drime**, preserving paths from `/`, 
 
 [Русская документация](README.md) · [Operations (Russian)](docs/OPERATIONS.ru.md) · [Restore (Russian)](docs/RESTORE.ru.md)
 
-**v0.1.0 is a prerelease.** It was extracted from a working Ubuntu 22.04 deployment. The original deployment's initial full backup was still in progress at release preparation. Sample round trips and local integration tests do not establish that an entire server can already be restored. This is an independent project, not an official Drime product.
+**v0.1.1 is a prerelease.** It was extracted from a working Ubuntu 22.04 deployment. The original deployment's initial full backup was still in progress at release preparation. Sample round trips and local integration tests do not establish that an entire server can already be restored. This is an independent project, not an official Drime product.
 
 Features:
 
@@ -33,7 +33,7 @@ sudo python3 scripts/configure.py
 
 The installer does **not** start uploading. The configurator asks for a dedicated workspace ID, account email, hidden API token and source roots. Review the configuration and Drime alert-policy requirements in the Russian README, run its read-only preflight, then enable `ubuntu-drime-backup.service`.
 
-The default clock is **Europe/Moscow**. From 07:00 to 19:00, five accumulated errors latch a stop; critical failures stop immediately. At night, failures are logged and retried without a new automatic persistent latch. Manual stops and prior daytime latches persist. These fixed day boundaries are part of v0.1.0's documented behavior.
+The default clock is **Europe/Moscow**. From 07:00 to 19:00, five accumulated errors latch a stop; critical failures stop immediately. At night, failures are logged and retried without a new automatic persistent latch. Manual stops and prior daytime latches persist. These fixed day boundaries are part of v0.1.1's documented behavior.
 
 ```bash
 sudo systemctl status ubuntu-drime-backup
