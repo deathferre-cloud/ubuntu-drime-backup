@@ -4,7 +4,7 @@ Continuous, one-way Ubuntu file backup to **Drime**, preserving paths from `/`, 
 
 [Русская документация](README.md) · [Operations (Russian)](docs/OPERATIONS.ru.md) · [Restore (Russian)](docs/RESTORE.ru.md)
 
-**v0.1.3 is a prerelease.** It was extracted from a working Ubuntu 22.04 deployment. The original deployment's initial full backup was still in progress at release preparation. Sample round trips and local integration tests do not establish that an entire server can already be restored. This is an independent project, not an official Drime product.
+**v0.1.4 is a prerelease.** It was extracted from a working Ubuntu 22.04 deployment. The original deployment's initial full backup was still in progress at release preparation. Sample round trips and local integration tests do not establish that an entire server can already be restored. This is an independent project, not an official Drime product.
 
 Features:
 
@@ -33,7 +33,7 @@ sudo python3 scripts/configure.py
 
 The installer does **not** start uploading. The configurator asks for a dedicated workspace ID, account email, hidden API token and source roots. Review the configuration and Drime alert-policy requirements in the Russian README, run its read-only preflight, then enable `ubuntu-drime-backup.service`.
 
-The default clock is **Europe/Moscow**. From 07:00 to 19:00, five accumulated errors latch a stop; critical failures stop immediately. At night, failures are logged and retried without a new automatic persistent latch. Manual stops and prior daytime latches persist. These fixed day boundaries are part of v0.1.3's documented behavior.
+The default clock is **Europe/Moscow**. From 07:00 to 19:00, five unresolved daytime errors latch a stop; critical failures stop immediately. At night, failures are logged and retried without a new automatic persistent latch. Manual stops and prior daytime latches persist. These fixed day boundaries are part of v0.1.4's documented behavior.
 
 ```bash
 sudo systemctl status ubuntu-drime-backup
@@ -51,4 +51,8 @@ Version 0.1.1 verifies an ambiguous history move by the original object ID in th
 
 ### Stalled-command recovery (0.1.3)
 
-Distinct `Making directory` events count as traversal progress, never as upload acknowledgements. Directory batches default to 16 entries. After 600 seconds without progress, the child is terminated and a durable 600-second maintenance pause begins, both day and night. After a read-only cloud preflight, retries use at most 16 entries and two transfers until a successful batch. Manual stops, existing safety latches and error counters are never cleared. Failed probes reschedule and actual errors retain the daytime budget. Process crashes, command-duration limits and security failures retain their prior policies. The panel shows the next attempt, and intentional pauses are excluded from ETA samples.
+Distinct `Making directory` events count as traversal progress, never as upload acknowledgements. Directory batches default to 16 entries. After 600 seconds without progress, the child is terminated and a durable 600-second maintenance pause begins, both day and night. After a read-only cloud preflight, retries use at most 16 entries and two transfers until a successful batch. Manual stops and existing safety latches are never cleared. Since 0.1.4, proven recovery of the matching operation releases its error-budget slot. Failed probes reschedule and actual errors retain the daytime budget. Process crashes, command-duration limits and security failures retain their prior policies. The panel shows the next attempt, and intentional pauses are excluded from ETA samples.
+
+### Unresolved error budget (0.1.4)
+
+The guard and panel now share the same resolution evidence. Confirmed recovery of a failed file/batch removes those errors from active day/night counts, preserving historical records. Unrelated successes do not clear failures, and security alerts require explicit review. Successful full observer reads and source scans resolve their respective outage events. The panel lists unresolved events even when they are older than the last ten journal lines. State upgrades to version 2; unavailable legacy evidence is kept unresolved, never silently discarded. Manual and already latched safety stops require operator action.

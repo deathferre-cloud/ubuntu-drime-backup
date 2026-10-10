@@ -81,18 +81,25 @@ $fileTotal=is_numeric($s['current_files'])&&is_numeric($s['pending_files']) ? $s
 </div><noscript><p class="muted">Для обновления каждые 30 секунд включите JavaScript. Ссылки ручного обновления доступны ниже.</p></noscript>
 <?php if ($message): ?><p class="notice"><?=esc($message)?></p><?php endif ?>
 <section><div class="state" id="live-service"><?= $blocked ? 'Остановлено и заблокировано' : ($running ? ($repair ? ($repair['label']??'Автоматическое восстановление') : 'Служба работает') : 'Служба остановлена / ожидает перезапуска') ?></div>
-<p id="live-period"><?= $s['daytime'] ? 'День: 07:00–19:00 МСК. Автостоп после 5 ошибок; критические сбои останавливают сразу.' : 'Ночь: 19:00–07:00 МСК. Автоматической блокировки нет, ошибки повторяются, письма Drime включены.' ?></p>
+<p id="live-period"><?= $s['daytime'] ? 'День: 07:00–19:00 МСК. Автостоп при 5 неустранённых дневных ошибках; критические сбои останавливают сразу.' : 'Ночь: 19:00–07:00 МСК. Автоматической блокировки нет, ошибки повторяются, письма Drime включены.' ?></p>
 <p>Ручной и ранее сработавший дневной стоп сохраняются круглосуточно, включая перезагрузку сервера.</p>
 <form method="post" action="<?=PANEL_PATH?>"><input type="hidden" name="csrf" value="<?=esc($_SESSION['csrf'])?>"><button class="stop" name="action" value="stop">Остановить копирование</button><button class="start" name="action" value="start">Снять блокировку и запустить</button></form>
-<p class="muted">Запуск остановленной службы подтверждает разбор ошибки и сбрасывает счётчик. Открытие ссылки само по себе ничего не запускает и не останавливает.</p><a data-refresh href="<?=PANEL_PATH?>">Обновить состояние</a></section>
+<p class="muted">Подтверждённое исправление освобождает лимит. Запуск остановленной службы подтверждает ручной разбор оставшихся ошибок и снимает блокировку. Открытие ссылки само по себе ничего не запускает и не останавливает.</p><a data-refresh href="<?=PANEL_PATH?>">Обновить состояние</a></section>
 <section id="live-progress"><h2>Ход копирования</h2><dl>
-<?php foreach (['Состояние systemd'=>($s['service']['ActiveState']??'?').'/'.($s['service']['SubState']??'?'),'Фаза'=>$s['phase'],'Автоматическое восстановление'=>$repair['label']??'Не требуется','Причина планового повтора'=>$repair['reason']??'—','Подтверждено файлов'=>progress_value($s['current_files'],$fileTotal),'Осталось файлов'=>grouped_integer($s['pending_files'],$fileTotal),'Передано байт'=>progress_value($s['current_bytes'],$s['source_bytes']),'Общий объём байт'=>grouped_integer($s['source_bytes'],$s['current_bytes']),'Дневные ошибки до ручного сброса'=>$s['day_errors'].' / 5','Ночные ошибки до ручного сброса'=>$s['night_errors'],'Последнее обновление UTC'=>$s['updated_at'],'Причина остановки / последняя ошибка'=>$s['reason']??$s['last_operation_error']??'—'] as $label=>$value): ?><dt><?=esc($label)?></dt><dd><?=esc($value??'—')?></dd><?php endforeach ?>
+<?php foreach (['Состояние systemd'=>($s['service']['ActiveState']??'?').'/'.($s['service']['SubState']??'?'),'Фаза'=>$s['phase'],'Автоматическое восстановление'=>$repair['label']??'Не требуется','Причина планового повтора'=>$repair['reason']??'—','Подтверждено файлов'=>progress_value($s['current_files'],$fileTotal),'Осталось файлов'=>grouped_integer($s['pending_files'],$fileTotal),'Передано байт'=>progress_value($s['current_bytes'],$s['source_bytes']),'Общий объём байт'=>grouped_integer($s['source_bytes'],$s['current_bytes']),'Неустранённые дневные ошибки'=>$s['day_errors'].' / 5','Неустранённые ночные ошибки'=>$s['night_errors'],'Исправлено ошибок (день / ночь)'=>($s['resolved_day_errors']??0).' / '.($s['resolved_night_errors']??0),'Последнее обновление UTC'=>$s['updated_at'],'Причина остановки / последняя ошибка'=>$s['reason']??$s['last_operation_error']??'—'] as $label=>$value): ?><dt><?=esc($label)?></dt><dd><?=esc($value??'—')?></dd><?php endforeach ?>
 </dl><p><?= $s['initial_copy_complete'] ? 'Первичное копирование завершалось: '.esc($s['initial_copy_complete']) : 'Первичная полная копия ещё не завершена.' ?></p></section>
 <section id="completion-estimate"><h2>Оценка времени до завершения копирования</h2>
 <p class="state"><?=esc($s['eta']['label']??'Прогноз пока недоступен')?></p>
 <?php if (!empty($s['eta']['finish_msk'])): ?><dl><dt><?= ($s['eta']['method']??'')==='objects_only' ? 'Ориентир даты по темпу обработки объектов' : 'Ориентировочная дата завершения очереди' ?></dt><dd><?=esc($s['eta']['finish_msk'])?></dd><dt>Измеренный темп</dt><dd><?=esc($s['eta']['objects_per_minute'])?> объектов/мин · <?=esc(number_format($s['eta']['bytes_per_second']/1048576,2,',',' '))?> МиБ/с подтверждённых данных</dd></dl><p class="muted"><?=esc($s['eta']['detail'])?></p>
 <?php else: ?><p class="muted">Оценка строится по реальным подтверждениям копирования. Статистика собирается автоматически, даже когда эта страница закрыта.</p><?php endif ?>
 </section>
+<section id="live-pending-errors"><h2>Нерешённые ошибки в счётчике</h2>
+<p class="muted">Здесь видны активные события, в том числе более старые, чем последние 10 строк журнала. Несколько сообщений одной операции не добавляют повторные ошибки. Подтверждённые исправления убираются из счётчика; история ниже сохраняется.</p>
+<?php if (empty($s['pending_errors']['total'])): ?><p class="resolved-mark">✓ Нерешённых ошибок в счётчике нет.</p>
+<?php else: ?><p>Учитывается ошибок: <?=esc($s['pending_errors']['total'])?>. Показаны до 20 последних активных событий.</p>
+<div class="table-scroll"><table class="error-log"><thead><tr><th>Время (МСК)</th><th>Период</th><th>Текст ошибки</th><th>Что это значит и что делать</th></tr></thead><tbody>
+<?php foreach ($s['pending_errors']['entries'] as $entry): ?><tr><td><?=esc($entry['time'])?></td><td><span class="open-mark">!</span> <?= $entry['period']==='day' ? 'День' : 'Ночь' ?><?php if ($entry['weight']>1): ?> × <?=esc($entry['weight'])?><?php endif ?></td><td><?=esc($entry['text'])?></td><td><?=esc($entry['description'])?></td></tr><?php endforeach ?>
+</tbody></table></div><?php endif ?></section>
 <section id="live-errors"><h2>Последние 10 ошибок</h2><p class="muted">Время по Москве (МСК). Самая свежая ошибка — сверху. Показана история журнала, включая уже исправленные ошибки.</p>
 <p class="muted"><span class="resolved-mark">✓</span> — исправление подтверждено. <span class="open-mark">!</span> — ошибка не закрыта или её исправление ещё не подтверждено. Основание указано под пояснением; перезапуск сам по себе ошибку не закрывает.</p>
 <?php if (empty($s['error_log']['available'])): ?><p>Не удалось прочитать журнал. Обновите страницу; кнопки управления доступны.</p>
@@ -110,7 +117,7 @@ $fileTotal=is_numeric($s['current_files'])&&is_numeric($s['pending_files']) ? $s
     const seconds = document.getElementById('refresh-seconds');
     const caption = document.getElementById('refresh-caption');
     const result = document.getElementById('refresh-result');
-    const ids = ['live-service', 'live-period', 'live-progress', 'completion-estimate', 'live-errors'];
+    const ids = ['live-service', 'live-period', 'live-progress', 'completion-estimate', 'live-pending-errors', 'live-errors'];
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const timeFormat = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', second: '2-digit'});
     let deadline = performance.now() + interval;

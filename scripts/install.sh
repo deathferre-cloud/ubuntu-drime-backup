@@ -15,7 +15,7 @@ done
 umask 077
 install -d -m 755 /opt/ubuntu-drime-backup
 install -d -m 700 /etc/ubuntu-drime-backup /var/lib/ubuntu-drime-backup
-for name in daemon.py safety.py control.py progress.py restore_metadata.py; do
+for name in daemon.py safety.py error_state.py control.py progress.py restore_metadata.py; do
   install -m 755 "$project/src/$name" "/opt/ubuntu-drime-backup/$name"
 done
 install -m 644 "$project/src/control.php" /opt/ubuntu-drime-backup/control.php

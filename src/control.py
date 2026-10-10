@@ -18,6 +18,8 @@ import time
 from zoneinfo import ZoneInfo
 from safety import SafetyGuard, atomic_json, now, sanitize
 import progress
+from error_state import (ErrorResolutions as SharedErrorResolutions, error_identity, error_file,
+                         iso_microseconds, moscow_time, refresh_error_state, event_key)
 
 CONFIG = pathlib.Path('/etc/ubuntu-drime-backup/backup.json')
 AUTH = pathlib.Path('/etc/ubuntu-drime-backup/control-auth.json')
@@ -49,6 +51,10 @@ def stop_backup():
 def explain_error(message):
     """Plain-language guidance from explicit evidence in the log, never a guessed cause."""
     text=message.lower()
+    if 'corrupted on transfer: sizes differ' in text:
+        return ('Размер переданного файла не совпал с размером исходника при проверке. Такое бывает, когда журнал продолжает расти во время копирования; '
+                'сама эта строка не доказывает повреждение диска. Файл остаётся в очереди до подтверждённой стабильной отправки. '
+                'После успешного повтора соответствующая ошибка становится зелёной и освобождает лимит.')
     if 'folder with same name already exists' in text:
         return ('Drime сообщил, что папка с таким именем уже существует, и отклонил её создание. '
                 'Это конфликт создания папки, а не доказательство потери файлов. Обработка этого случая уже добавлена в клиент. '
@@ -57,7 +63,7 @@ def explain_error(message):
         return ('Скачанный контрольный файл не совпал с исходным по контрольной сумме. Служба не считает такую копию исправной и возвращает файл в очередь. '
                 'Нужно проверить конкретный исходник и его облачную версию; до проверки не полагайтесь на эту копию.')
     if 'error limit reached' in text or 'error budget exhausted' in text:
-        return ('Набралось 5 дневных ошибок с последнего ручного сброса. Сработала защита и остановила копирование. '
+        return ('Одновременно осталось 5 неустранённых дневных ошибок. Сработала защита и остановила копирование. '
                 'Сначала разберите предыдущие ошибки в таблице и устраните причину, затем нажмите «Снять блокировку и запустить».')
     if 'scheduled recovery' in text or 'no observable progress' in text or 'stall deadline' in text:
         return ('Клиент долго не показывал наблюдаемого продвижения. У пачек каталогов байтовые счётчики остаются нулевыми даже во время работы. '
@@ -128,7 +134,7 @@ def explain_error(message):
     if re.search(r'(?<![\d])0 unconfirmed files retained',text) or 'all batch files were individually confirmed' in text:
         return ('Команда завершилась с ошибкой, но все файлы этой пачки уже получили отдельные подтверждения успешной отправки. '
                 'Повторная загрузка этих файлов не требуется. Соседняя подробная запись объясняет сбой служебной операции, например чтения каталога; '
-                'он остаётся в дневном счётчике до разбора.')
+                'он исключается из счётчика после подтверждённого исправления соответствующей операции.')
     pending=re.search(r'\boperation failed;\s*(\d+) unconfirmed files retained',text)
     if pending:
         cause=(' Причиной было чтение предупреждений Drime, а не установленная ошибка содержимого этих файлов.'
@@ -150,93 +156,10 @@ def explain_error(message):
             'Сохраните время и текст ошибки и разберите соседние сообщения журнала; если служба заблокирована, сначала установите причину, затем запускайте её.')
 
 
-def error_identity(stamp, message):
-    return hashlib.sha256((str(stamp)+'\0'+message).encode('utf-8')).hexdigest()
-
-
-def error_file(message):
-    """Only exact file references; never infer a path from a batch summary."""
-    match=re.search(r'\bpath_b64=([A-Za-z0-9+/]+={0,2})(?=[:\s]|$)',message)
-    if match:
-        try: path=base64.b64decode(match[1],validate=True)
-        except (ValueError,binascii.Error): return None
-    else:
-        match=re.search(r'(?:\bWARNING rclone (?:error|fatal) |\b(?:DAY|NIGHT) error: rclone_error: )([^:\n]+): (?:Failed to (?:copy|open|read|upload)|Couldn\x27t move)\b',message)
-        if not match: return None
-        # Non-ASCII log object encoding can be ambiguous; require exact Base64 instead.
-        if any(ord(c)<32 or ord(c)>126 for c in match[1]): return None
-        path=match[1].encode('ascii')
-    path=path.removeprefix(b'/')
-    if not path or b'\0' in path or b'..' in path.split(b'/'): return None
-    return path
-
-
-def iso_microseconds(value):
-    instant=dt.datetime.fromisoformat(value.replace('Z','+00:00'))
-    if instant.tzinfo is None: raise ValueError('Missing timezone in confirmation')
-    return int(instant.timestamp()*1_000_000)
-
-
-def moscow_time(stamp):
-    return dt.datetime.fromtimestamp(stamp/1_000_000,ZoneInfo('Europe/Moscow')).strftime('%Y.%m.%d — %H:%M:%S')
-
-
 class ErrorResolutions:
-    """Read-only evidence: a later confirmed upload or an explicit incident review."""
-    def __init__(self):
-        self.reviews=read_json(ROOT/'error-resolutions.json')
-        self.db=None
-
-    def close(self):
-        if self.db is not None: self.db.close()
-
-    def lookup(self, stamp, message):
-        pending=dict(resolved=False,label='Не закрыта',
-            detail='Подтверждения исправления этой ошибки пока нет. Она требует проверки и может повториться.')
-        key=error_identity(stamp,message)
-        review=self.reviews.get(key,{}) if isinstance(self.reviews,dict) else {}
-        try:
-            reviewed_at=iso_microseconds(review.get('at',''))
-            reason=review.get('reason')
-            if reviewed_at>stamp and isinstance(reason,str) and reason.strip():
-                return dict(resolved=True,label='Исправлена',
-                    detail='Подтверждено при разборе '+moscow_time(reviewed_at)+' МСК. '+sanitize(reason))
-        except (ValueError,TypeError,AttributeError): pass
-        incident=re.search(r'\[incident_id=([0-9a-f]{32})\]',message)
-        incident_id=incident[1] if incident else review.get('incident_id') if isinstance(review,dict) else None
-        if isinstance(incident_id,str) and re.fullmatch(r'[0-9a-f]{32}',incident_id):
-            try:
-                if self.db is None:
-                    self.db=sqlite3.connect((ROOT/'journal.sqlite3').as_uri()+'?mode=ro',uri=True,timeout=1)
-                    self.db.execute('PRAGMA query_only=ON')
-                row=self.db.execute('SELECT resolved_at,error FROM transfer_incidents WHERE id=?',(incident_id,)).fetchone()
-                total,remaining=self.db.execute('SELECT COUNT(*),SUM(resolved_at IS NULL) FROM incident_files WHERE incident_id=?',(incident_id,)).fetchone()
-                if row and row[1] and total and not remaining and row[0]:
-                    return dict(resolved=True,label='Исправлена',detail='Повтор этой пачки подтверждён '+moscow_time(iso_microseconds(row[0]))+
-                        ' МСК. Все её файлы получили подтверждение отправки. Новые изменения файлов учитываются отдельно.')
-                pending['detail']='У этой записи есть связь с конкретной пачкой. Подтверждения ожидают: '+str(remaining if total else 'проверка продолжается')+'. Успех другой пачки её не закрывает.'
-                return pending
-            except (OSError,sqlite3.Error,ValueError,TypeError,AttributeError):
-                pending['detail']='Связь с пачкой записана, но проверить её подтверждения сейчас не удалось.'
-                return pending
-        path=error_file(message)
-        if path is None:
-            pending['detail']='В записи нет однозначного имени файла, а отдельного подтверждения исправления нет. Успех другой передачи или перезапуск её не закрывает.'
-            return pending
-        try:
-            if self.db is None:
-                self.db=sqlite3.connect((ROOT/'journal.sqlite3').as_uri()+'?mode=ro',uri=True,timeout=1)
-                self.db.execute('PRAGMA query_only=ON')
-            row=self.db.execute('SELECT present,kind,uploaded=sig,uploaded_at,last_error FROM entries WHERE path=?',(path,)).fetchone()
-            if row and row[0] and row[1] in ('file','link') and row[2] and row[4] is None and row[3]:
-                copied_at=iso_microseconds(row[3])
-                if copied_at>stamp:
-                    return dict(resolved=True,label='Исправлена',detail='Успешный повтор подтверждён '+moscow_time(copied_at)+
-                        ' МСК. Текущая учтённая версия файла скопирована, ошибки в очереди для неё нет.')
-            pending['detail']='После этой ошибки нет подтверждения успешной отправки текущей учтённой версии файла либо он снова ожидает копирования/имеет ошибку.'
-        except (OSError,sqlite3.Error,ValueError,TypeError,AttributeError):
-            pending['detail']='Не удалось проверить подтверждения в журнале очереди. Исправление пока не подтверждено.'
-        return pending
+    # Keep the controller's injectable ROOT; implementation is shared with safety.
+    def __new__(cls):
+        return SharedErrorResolutions(ROOT)
 
 
 def recent_errors():
@@ -277,7 +200,7 @@ def status():
     result = systemctl('show', '--property=ActiveState,SubState,MainPID,NRestarts')
     live = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
     state = read_json(ROOT/'status.json')
-    guard = read_json(ROOT/'safety-state.json')
+    guard = refresh_error_state(read_json(ROOT/'safety-state.json'),ROOT)
     # Only fixed-unit, bounded, sanitized errors are exposed after authentication.
     selected = {k: state.get(k) for k in ('updated_at','phase','current_files','pending_files',
         'current_bytes','source_bytes','pending_directories','initial_copy_complete','active','last_operation_error','error_files','repair')}
@@ -285,6 +208,13 @@ def status():
         safety_stop=(ROOT/'SAFETY_STOP.json').exists(),manual_stop=(ROOT/'MANUAL_STOP.json').exists(),
         reason=guard.get('reason'),error_log=recent_errors(),
         daytime=SafetyGuard.daytime(None),server_time=now())
+    unresolved=[e for e in guard.get('events',[]) if not e.get('resolved_at')]
+    selected['pending_errors']={'total':sum(e.get('weight',1) for e in unresolved),'entries':[
+        dict(id=event_key(e['id']),time=moscow_time(iso_microseconds(e['at'])),period=e.get('period','day'),
+             weight=e.get('weight',1),text=sanitize(e['detail']),description=explain_error(e['kind']+': '+e['detail']))
+        for e in sorted(unresolved,key=lambda e:e.get('at',''),reverse=True)[:20]]}
+    selected['resolved_day_errors']=max(0,guard.get('day_total',0)-guard.get('count',0))
+    selected['resolved_night_errors']=max(0,guard.get('night_total',0)-guard.get('night_errors',0))
     selected['eta']=progress.estimate(read_json(ROOT/'progress-history.json'),
         progress.sample(state,guard,read_json(ROOT/'RUNNING.json'),time.time()),
         live.get('ActiveState')=='active',selected['safety_stop'] or selected['manual_stop'],time.time(),state.get('scan_errors',0))

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4 — 2026-10-10 (prerelease)
+
+- Count only unresolved daytime/nighttime failures. Guard and panel share durable incident/file recovery evidence; proven matching recovery releases budget slots.
+- Preserve manual/security latches, unresolved events beyond the old 100-event history cap, and unattributed legacy counts during the version-2 state migration.
+- Resolve observer/scan outages only after successful corresponding checks; cloud security alerts cannot borrow upload confirmations.
+- Add an active-error table, separate resolved totals, stable error IDs and plain-language live-file size-mismatch guidance.
+- Update installer and documentation for the shared resolution module. Add 12 regressions covering recovery, stop precedence, migration, retention and panel agreement.
+
 ## 0.1.3 — 2026-10-10 (prerelease)
 
 - Track distinct `Making directory` events as traversal progress, without treating them as upload confirmations. Repeated attempts on one path cannot conceal a stall.

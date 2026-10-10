@@ -88,6 +88,7 @@ class SafetyTests(unittest.TestCase):
 
     def test_fifth_error_kills_process_tree_and_preserves_success(self):
         data=self.root/'source/ok';data.write_bytes(b'OK')
+        for i in range(5):(self.root/'source'/('file-'+str(i))).write_bytes(b'pending')
         childpid=self.root/'child.pid'
         self.script('''import json,os,pathlib,subprocess,sys,time
 child=subprocess.Popen(['/bin/sleep','90'])

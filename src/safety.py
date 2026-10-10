@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Persistent, manually reset backup safety latch and Drime alert observer."""
+"""Persistent unresolved-error budget, manual safety latch and Drime observer."""
 import argparse
 import configparser
 import datetime as dt
@@ -14,6 +14,7 @@ import subprocess
 import time
 import uuid
 from zoneinfo import ZoneInfo
+from error_state import sanitize, refresh_error_state, event_key
 
 
 class SafetyStop(RuntimeError):
@@ -27,12 +28,6 @@ class RecordedError(RuntimeError):
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
-
-
-def sanitize(value):
-    value = re.sub(r'(https?://[^\s"?]+)\?[^\s"]+', r'\1?[redacted]', str(value))
-    value = re.sub(r'(?i)(bearer\s+|access_token[=:]\s*)[^\s,;]+', r'\1[redacted]', value)
-    return value[:1200]
 
 
 def atomic_json(path, value):
@@ -66,7 +61,7 @@ class SafetyGuard:
         if self.path.exists():
             try:
                 self.data = json.loads(self.path.read_text())
-                assert self.data['version'] == 1 and isinstance(self.data['count'], int)
+                assert self.data['version'] in (1,2) and isinstance(self.data['count'], int)
                 assert isinstance(self.data['events'], list) and self.data['status'] in ('armed', 'stopped')
             except (ValueError, KeyError, AssertionError, TypeError):
                 self.trip('Safety state is unreadable; inspection required')
@@ -80,7 +75,17 @@ class SafetyGuard:
         self.data['updated_at'] = now()
         atomic_json(self.path, self.data)
 
+    def reconcile(self):
+        updated=refresh_error_state(self.data,self.root)
+        if updated!=self.data:
+            self.data=updated;self.save()
+
+    def confirm_health(self, kind):
+        self.data[kind+'_healthy_at']=now()
+        self.reconcile();self.save()
+
     def check(self):
+        self.reconcile()
         if self.manual.exists():
             raise SafetyStop('Persistent manual stop: '+str(self.manual))
         if self.latch.exists() or self.data['status'] == 'stopped':
@@ -103,16 +108,17 @@ class SafetyGuard:
         event_id = event_id or str(uuid.uuid4())
         if any(e['id'] == event_id for e in self.data['events']): return
         day = self.daytime()
-        if day: self.data['count'] += 1
-        else: self.data['night_errors'] = self.data.get('night_errors', 0)+1
+        field='day_total' if day else 'night_total'
+        self.data[field]=self.data.get(field,0)+1
         self.data['events'].append(dict(id=event_id, kind=kind, detail=sanitize(detail), at=now(), period='day' if day else 'night'))
-        self.data['events'] = self.data['events'][-100:]
+        self.reconcile()
         self.save()
-        logging.getLogger('ubuntu-drime-backup').warning('%s error: %s: %s', 'DAY' if day else 'NIGHT', kind, sanitize(detail))
+        logging.getLogger('ubuntu-drime-backup').warning('%s error: %s: %s [error_id=%s]', 'DAY' if day else 'NIGHT', kind, sanitize(detail),event_key(event_id))
         if day and self.data['count'] >= self.limit:
             self.trip(f"Error limit reached ({self.data['count']}/{self.limit}); last event: {kind}: {sanitize(detail)}")
 
     def summary(self):
+        self.reconcile()
         result = {k:self.data.get(k) for k in ('status','count','reason','stopped_at','activity_cursor','night_errors')}
         result.update(limit=self.limit,period='day' if self.daytime() else 'night',auto_stop_enabled=self.daytime(),
                       manual_stop=self.manual.exists(),latched=self.latch.exists() or self.data['status']=='stopped')
@@ -239,6 +245,7 @@ class SafetyGuard:
         try:
             if time.monotonic() >= self.next_policy_check: self.validate_policies()
             self.ingest_activity(self.activity_since_cursor())
+            self.confirm_health('observer')
         except SafetyStop: raise
         except RecordedError:
             if self.daytime(): raise

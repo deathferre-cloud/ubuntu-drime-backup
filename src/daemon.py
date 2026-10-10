@@ -258,7 +258,7 @@ class Backup:
                         if paused_at is not None:self.phase=phase_before_pause
             if p.returncode<0: self.guard.trip('Rclone process crashed with signal '+str(-p.returncode))
             if p.returncode:
-                if not seen_errors: self.guard.record('rclone_exit','rclone exit code '+str(p.returncode),command_id)
+                if not seen_errors: self.guard.record('rclone_exit','rclone exit code '+str(p.returncode)+incident_suffix,command_id)
                 raise RecordedError('rclone exit code '+str(p.returncode))
             if capture: output.seek(0);return output.read()
 
@@ -283,6 +283,7 @@ class Backup:
             self.db.execute('UPDATE transfer_incidents SET error=? WHERE id=?',(sanitize(error),incident))
             self.resolve_incidents()
         self.db.commit()
+        self.guard.reconcile()
 
     def checkpoint(self,row):
         try: current=signature(os.lstat(os.path.join(self.source,row['path'])))
@@ -457,8 +458,9 @@ class Backup:
         self.last_scan = time.monotonic()
         LOG.info('Scanned %d entries in %.1fs; errors=%d',count,self.last_scan-started,len(errors))
         self.status()
+        if not errors: self.guard.confirm_health('scan')
         for path,error in errors:
-            self.guard.record('scan_error',path+': '+error)
+            self.guard.record('scan_error','path_b64='+path+': '+error)
 
     def pending(self, kind='file', failures_only=False):
         age_limit = time.time_ns()-int(self.c['settle_seconds']*1e9)
@@ -552,7 +554,7 @@ class Backup:
             raise
         except Exception as e:
             self.last_operation_error=str(e)
-            if not isinstance(e,RecordedError): self.guard.record('transfer_error',str(e))
+            if not isinstance(e,RecordedError): self.guard.record('transfer_error',str(e)+' [incident_id='+incident+']')
             # Keep durable acknowledgements for individually completed writes;
             # only remaining files enter retry/backoff after a partial failure.
             batch=[row for row in batch if self.db.execute('SELECT uploaded FROM entries WHERE path=?',(row['path'],)).fetchone()[0]!=row['sig']]
