@@ -68,6 +68,7 @@ if (!$result['ok']) deny(503);
 $s=$result['status'];
 $running=($s['service']['ActiveState']??'')==='active';
 $blocked=$s['manual_stop']||$s['safety_stop'];
+$repair=$s['repair']??null;
 $fileTotal=is_numeric($s['current_files'])&&is_numeric($s['pending_files']) ? $s['current_files']+$s['pending_files'] : null;
 ?>
 <!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ubuntu Drime Backup — управление резервной копией</title>
@@ -79,13 +80,13 @@ $fileTotal=is_numeric($s['current_files'])&&is_numeric($s['pending_files']) ? $s
 <div class="refresh-copy"><strong id="refresh-caption">Обновление через 30 с</strong><small id="refresh-result" role="status" aria-live="polite">Данные загружены при открытии страницы.</small></div>
 </div><noscript><p class="muted">Для обновления каждые 30 секунд включите JavaScript. Ссылки ручного обновления доступны ниже.</p></noscript>
 <?php if ($message): ?><p class="notice"><?=esc($message)?></p><?php endif ?>
-<section><div class="state" id="live-service"><?= $blocked ? 'Остановлено и заблокировано' : ($running ? 'Служба работает' : 'Служба остановлена / ожидает перезапуска') ?></div>
+<section><div class="state" id="live-service"><?= $blocked ? 'Остановлено и заблокировано' : ($running ? ($repair ? ($repair['label']??'Автоматическое восстановление') : 'Служба работает') : 'Служба остановлена / ожидает перезапуска') ?></div>
 <p id="live-period"><?= $s['daytime'] ? 'День: 07:00–19:00 МСК. Автостоп после 5 ошибок; критические сбои останавливают сразу.' : 'Ночь: 19:00–07:00 МСК. Автоматической блокировки нет, ошибки повторяются, письма Drime включены.' ?></p>
 <p>Ручной и ранее сработавший дневной стоп сохраняются круглосуточно, включая перезагрузку сервера.</p>
 <form method="post" action="<?=PANEL_PATH?>"><input type="hidden" name="csrf" value="<?=esc($_SESSION['csrf'])?>"><button class="stop" name="action" value="stop">Остановить копирование</button><button class="start" name="action" value="start">Снять блокировку и запустить</button></form>
 <p class="muted">Запуск остановленной службы подтверждает разбор ошибки и сбрасывает счётчик. Открытие ссылки само по себе ничего не запускает и не останавливает.</p><a data-refresh href="<?=PANEL_PATH?>">Обновить состояние</a></section>
 <section id="live-progress"><h2>Ход копирования</h2><dl>
-<?php foreach (['Состояние systemd'=>($s['service']['ActiveState']??'?').'/'.($s['service']['SubState']??'?'),'Фаза'=>$s['phase'],'Подтверждено файлов'=>progress_value($s['current_files'],$fileTotal),'Осталось файлов'=>grouped_integer($s['pending_files'],$fileTotal),'Передано байт'=>progress_value($s['current_bytes'],$s['source_bytes']),'Общий объём байт'=>grouped_integer($s['source_bytes'],$s['current_bytes']),'Дневные ошибки до ручного сброса'=>$s['day_errors'].' / 5','Ночные ошибки до ручного сброса'=>$s['night_errors'],'Последнее обновление UTC'=>$s['updated_at'],'Причина остановки / последняя ошибка'=>$s['reason']??$s['last_operation_error']??'—'] as $label=>$value): ?><dt><?=esc($label)?></dt><dd><?=esc($value??'—')?></dd><?php endforeach ?>
+<?php foreach (['Состояние systemd'=>($s['service']['ActiveState']??'?').'/'.($s['service']['SubState']??'?'),'Фаза'=>$s['phase'],'Автоматическое восстановление'=>$repair['label']??'Не требуется','Причина планового повтора'=>$repair['reason']??'—','Подтверждено файлов'=>progress_value($s['current_files'],$fileTotal),'Осталось файлов'=>grouped_integer($s['pending_files'],$fileTotal),'Передано байт'=>progress_value($s['current_bytes'],$s['source_bytes']),'Общий объём байт'=>grouped_integer($s['source_bytes'],$s['current_bytes']),'Дневные ошибки до ручного сброса'=>$s['day_errors'].' / 5','Ночные ошибки до ручного сброса'=>$s['night_errors'],'Последнее обновление UTC'=>$s['updated_at'],'Причина остановки / последняя ошибка'=>$s['reason']??$s['last_operation_error']??'—'] as $label=>$value): ?><dt><?=esc($label)?></dt><dd><?=esc($value??'—')?></dd><?php endforeach ?>
 </dl><p><?= $s['initial_copy_complete'] ? 'Первичное копирование завершалось: '.esc($s['initial_copy_complete']) : 'Первичная полная копия ещё не завершена.' ?></p></section>
 <section id="completion-estimate"><h2>Оценка времени до завершения копирования</h2>
 <p class="state"><?=esc($s['eta']['label']??'Прогноз пока недоступен')?></p>

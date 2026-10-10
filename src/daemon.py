@@ -45,6 +45,11 @@ def b64(value):
     return base64.b64encode(value).decode('ascii')
 
 
+class ScheduledRetry(RecordedError):
+    """A stalled command may be retried after a durable maintenance pause."""
+    pass
+
+
 class Backup:
     def __init__(self, config):
         self.c = config
@@ -95,6 +100,56 @@ class Backup:
         self.db.execute('INSERT OR REPLACE INTO settings VALUES (?,?)', (key, value))
         self.db.commit()
 
+    def repair_state(self):
+        value=self.setting('scheduled_repair')
+        return json.loads(value) if value else None
+
+    def schedule_repair(self, reason, incident=None):
+        previous=self.repair_state() or {}
+        delay=int(self.c.get('stall_recovery_seconds',600))
+        if not 60 <= delay <= 86400: raise ValueError('Invalid stall recovery interval')
+        state=dict(state='waiting',reason=sanitize(reason),retry_at=time.time()+delay,
+                   attempts=int(previous.get('attempts',0))+1,incident_id=incident or previous.get('incident_id'))
+        self.setting('scheduled_repair',json.dumps(state))
+        self.phase='repair_wait';self.active=None;self.last_operation_error=sanitize(reason)
+        self.status()
+        suffix=' [incident_id='+state['incident_id']+']' if state['incident_id'] else ''
+        LOG.error('Scheduled recovery in %d seconds after stalled operation: %s%s',delay,sanitize(reason),suffix)
+
+    def repair_gate(self):
+        state=self.repair_state()
+        if not state or state['state']=='retrying': return False
+        self.guard.check()  # A manual or safety latch always wins, even during the pause.
+        if time.time()<state['retry_at']:
+            self.phase='repair_wait';self.active=None;self.status()
+            return True
+        self.phase='repair_probe';self.status()
+        try:
+            # Recheck policies/activity, then prove that the upload backend can list
+            # the destination. Read-only probes never acknowledge queued files.
+            self.rc('lsf',self.c['destination'],'--dirs-only','--max-depth','1',capture=True)
+        except SafetyStop: raise
+        except Exception as error:
+            if not isinstance(error,RecordedError): self.guard.record('repair_probe_error',str(error))
+            self.schedule_repair(str(error),state.get('incident_id'))
+            return True
+        state.update(state='retrying',retry_at=None)
+        self.setting('scheduled_repair',json.dumps(state))
+        self.last_scan=0  # Reconcile source changes made during the pause.
+        LOG.info('Scheduled recovery probe passed; retrying a small batch without resetting safety counters')
+        return False
+
+    def finish_repair(self):
+        if (self.repair_state() or {}).get('state')=='retrying':
+            self.setting('scheduled_repair','')
+            LOG.info('Scheduled recovery confirmed by a completed batch; normal transfer profile restored')
+
+    def batch_limit(self, kind, failures_only=False):
+        limit=max(1,int(self.c['batch_files']))
+        if kind=='dir': limit=min(limit,max(1,int(self.c.get('directory_batch_files',16))))
+        if failures_only or (self.repair_state() or {}).get('state')=='retrying': limit=min(limit,16)
+        return limit
+
     def command(self, *args):
         prefix=[self.c['network_wrapper']] if self.c.get('network_wrapper') else []
         tps=self.c['tpslimit']
@@ -125,7 +180,7 @@ class Backup:
         command=self.command(*args)+['--use-json-log','--retries','1']
         command_id=str(uuid.uuid4()); seen_errors=set(); buffer=b''
         incident_suffix=' [incident_id='+incident_id+']' if incident_id else ''
-        started=last_progress=time.monotonic(); progress=None
+        started=last_progress=time.monotonic(); progress=None; directory_progress=set()
         def event_line(line):
             nonlocal last_progress,progress
             try: event=json.loads(line)
@@ -135,7 +190,15 @@ class Backup:
             msg=event.get('msg','');level=event.get('level','info')
             if 'stats' in event:
                 stats=event['stats']; current=tuple(stats.get(k,0) for k in ('bytes','transfers','checks'))
-                if current!=progress: last_progress=time.monotonic();progress=current
+                if current!=progress and (progress is not None or any(current)): last_progress=time.monotonic()
+                progress=current
+            elif msg.startswith('Making directory') and event.get('object'):
+                # Mkdir logs BEFORE its API call. A new path is traversal progress,
+                # not an upload acknowledgement. Repeated attempts on one path
+                # must not keep a genuinely stuck command alive indefinitely.
+                path=event['object']
+                if path not in directory_progress:
+                    directory_progress.add(path);last_progress=time.monotonic()
             elif msg.startswith(('Copied (','Made directory','Set directory modification time')):
                 last_progress=time.monotonic()
             if level in ('error','fatal'):
@@ -176,7 +239,7 @@ class Backup:
                             if time.monotonic()-started>self.c.get('command_timeout_seconds',3600):
                                 self.guard.trip('Rclone exceeded maximum command duration')
                             if time.monotonic()-last_progress>self.c.get('stall_timeout_seconds',600):
-                                self.guard.trip('Rclone made no observable progress before stall deadline')
+                                raise ScheduledRetry('Rclone made no observable progress before stall deadline; last counters='+str(progress)+'; distinct directory operations='+str(len(directory_progress)))
                             for key,_ in selector.select(timeout=0.5):
                                 chunk=os.read(key.fileobj.fileno(),65536)
                                 if not chunk:
@@ -273,9 +336,11 @@ class Backup:
         threshold=self.c.get('large_file_threshold',1048576)
         large=files and sum(row['size']>=threshold for row in files)*2>=len(files)
         if not self.guard.daytime():
-            return self.c.get('night_large_file_transfers' if large else 'night_transfers',self.c['transfers'])
-        count=self.c.get('large_file_transfers',self.c['transfers']) if large else self.c['transfers']
-        return min(count,2) if self.guard.data['count'] else count
+            count=self.c.get('night_large_file_transfers' if large else 'night_transfers',self.c['transfers'])
+        else:
+            count=self.c.get('large_file_transfers',self.c['transfers']) if large else self.c['transfers']
+        reduced=(self.guard.daytime() and self.guard.data['count']) or (self.repair_state() or {}).get('state')=='retrying'
+        return min(count,2) if reduced else count
 
     def status(self):
         self.counts = dict(self.db.execute('''SELECT
@@ -297,7 +362,7 @@ class Backup:
                     initial_copy_complete=self.setting('initial_copy_complete'),
                     last_manifest=self.setting('last_manifest'),
                     last_sample_verification=self.setting('last_sample_verification'),
-                    safety=self.guard.summary(),
+                    safety=self.guard.summary(),repair=self.repair_state(),
                     **self.counts)
         tmp = self.state / 'status.json.tmp'
         tmp.write_text(json.dumps(data, ensure_ascii=True, indent=2)+'\n')
@@ -403,7 +468,7 @@ class Backup:
           ORDER BY CASE WHEN last_error IS NOT NULL THEN -1 WHEN uploaded!='' THEN 0 WHEN substr(path,1,18)=x'7661722f7777772f76686f7374732f62642f' THEN 1 ELSE 2 END,
           path LIMIT ?''',
           (kind,time.time(),age_limit,int(failures_only),
-           min(16,self.c['batch_files']) if failures_only else self.c['batch_files'])).fetchall()
+           self.batch_limit(kind,failures_only))).fetchall()
         batch=[]; size=0
         for row in candidates:
             if batch and size+row['size']>self.c['batch_bytes']: break
@@ -422,6 +487,7 @@ class Backup:
 
     def transfer(self, batch, depth=0):
         if not batch: return
+        batch=batch[:self.batch_limit(batch[0]['kind'])]
         self.phase = 'copying'
         self.active = dict(files=len(batch),bytes=sum(r['size'] for r in batch),started_at=utc())
         self.status()
@@ -493,16 +559,17 @@ class Backup:
             for row in batch:
                 failures=row['failures']+1
                 self.db.execute('UPDATE entries SET failures=?,retry_at=?,last_error=COALESCE(last_error,?) WHERE path=?',
-                    (failures,time.time()+min(3600,60*2**min(failures,6))+random.uniform(0,15),sanitize(e),row['path']))
+                    (failures,time.time()+(int(self.c.get('stall_recovery_seconds',600)) if isinstance(e,ScheduledRetry) else min(3600,60*2**min(failures,6))+random.uniform(0,15)),sanitize(e),row['path']))
             if batch:
                 LOG.error('Operation failed; %d unconfirmed files retained for retry: %s [incident_id=%s]',len(batch),sanitize(e),incident)
             else:
                 LOG.error('Operation failed after all batch files were individually confirmed; no file re-upload scheduled: %s [incident_id=%s]',sanitize(e),incident)
             self.finish_incident(incident,e)
+            if isinstance(e,ScheduledRetry): self.schedule_repair(str(e),incident)
         else:
-            for row in batch:
-                self.checkpoint(row)
+            confirmed=sum(self.checkpoint(row) for row in batch)
             self.finish_incident(incident)
+            if confirmed: self.finish_repair()
             self.last_operation_error=None
             LOG.info('Completed batch: %d files, %d bytes',len(batch),sum(r['size'] for r in batch))
         self.active=None
@@ -551,7 +618,7 @@ class Backup:
             check_path=self.state/'verify.download'
             try:
                 check_path.write_bytes(self.rc('cat',self.c['destination']+'/'+os.fsdecode(row['path']),capture=True))
-            except SafetyStop: raise
+            except (SafetyStop,ScheduledRetry): raise
             except Exception:
                 self.db.execute("UPDATE entries SET uploaded='',last_error='Sample download failed' WHERE path=?",(row['path'],))
                 self.db.commit()
@@ -571,6 +638,7 @@ class Backup:
             LOG.info('Verified downloaded SHA256 for %d sample files',checked)
 
     def cycle(self):
+        if self.repair_gate(): return False
         self.guard.poll(force=True)
         if time.monotonic()-self.last_scan>=self.c['scan_interval']:
             self.scan()
@@ -624,6 +692,10 @@ def main():
             try:
                 work=backup.cycle()
             except SafetyStop: raise
+            except ScheduledRetry as e:
+                backup.schedule_repair(str(e))
+                if args.once: raise
+                continue
             except Exception as e:
                 if not isinstance(e,RecordedError): backup.guard.record('cycle_error',str(e))
                 backup.phase='retrying';backup.last_operation_error=sanitize(e);backup.status()

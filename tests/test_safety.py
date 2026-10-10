@@ -11,7 +11,7 @@ from unittest.mock import patch
 import datetime as dt
 
 from safety import SafetyGuard, SafetyStop, RecordedError
-from daemon import Backup
+from daemon import Backup, ScheduledRetry
 
 
 class SafetyTests(unittest.TestCase):
@@ -127,8 +127,9 @@ sys.exit(5)
         self.script('import time\ntime.sleep(90)\n')
         self.config['stall_timeout_seconds']=.3
         b=self.backup();start=time.monotonic()
-        with self.assertRaises(SafetyStop):b.rc('copy')
+        with self.assertRaises(ScheduledRetry):b.rc('copy')
         self.assertLess(time.monotonic()-start,4)
+        self.assertFalse(b.guard.latch.exists());self.assertEqual(b.guard.data['count'],0)
 
     def test_process_crash_stops_immediately(self):
         self.script('import os,signal\nos.kill(os.getpid(),signal.SIGKILL)\n')

@@ -11,7 +11,7 @@ MAX_AGE=180
 def sample(state, guard, run, now):
     try:
         stamp=dt.datetime.fromisoformat(state['updated_at']).timestamp()
-        if not 0 <= now-stamp <= MAX_AGE or state['phase'] in ('stopped','safety_stopped'):
+        if not 0 <= now-stamp <= MAX_AGE or state['phase'] in ('stopped','safety_stopped','repair_wait','repair_probe'):
             return None
         if not run.get('pid') or not run.get('started_at'):return None
         names=('current_files','current_bytes','pending_files','pending_directories','source_bytes')

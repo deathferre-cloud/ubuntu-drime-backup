@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3 — 2026-10-10 (prerelease)
+
+- Track distinct `Making directory` events as traversal progress, without treating them as upload confirmations. Repeated attempts on one path cannot conceal a stall.
+- Limit directory batches to 16 entries by default; retain the 512-entry file batch limit.
+- Persist a 10-minute maintenance pause after a stalled command, then recheck cloud access and retry with at most 16 entries and two transfers. Failed probes reschedule; actual daytime errors still consume the existing safety budget.
+- Never clear manual stops, safety latches or error counters during automatic recovery. Preserve partial acknowledgements and retry deadlines across restarts.
+- Show the next recovery attempt in the panel and exclude maintenance pauses from the ETA sample. Correlate reviewed legacy stall rows with durable incident evidence.
+- Added 11 recovery regressions, including real child-process hangs, timer persistence, directory progress, partial acknowledgements and stop precedence.
+
 ## 0.1.2 — 2026-10-09 (prerelease)
 
 - Refresh panel status, progress, ETA and recent errors every 30 seconds without reloading the page.

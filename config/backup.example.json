@@ -75,5 +75,7 @@
   "cloud_guard_connect_timeout": 10,
   "cloud_guard_timeout": 20,
   "cloud_guard_retry_timeout": 45,
-  "cloud_guard_retry_delay": 2
+  "cloud_guard_retry_delay": 2,
+  "directory_batch_files": 16,
+  "stall_recovery_seconds": 600
 }

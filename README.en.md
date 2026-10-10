@@ -4,7 +4,7 @@ Continuous, one-way Ubuntu file backup to **Drime**, preserving paths from `/`, 
 
 [Русская документация](README.md) · [Operations (Russian)](docs/OPERATIONS.ru.md) · [Restore (Russian)](docs/RESTORE.ru.md)
 
-**v0.1.2 is a prerelease.** It was extracted from a working Ubuntu 22.04 deployment. The original deployment's initial full backup was still in progress at release preparation. Sample round trips and local integration tests do not establish that an entire server can already be restored. This is an independent project, not an official Drime product.
+**v0.1.3 is a prerelease.** It was extracted from a working Ubuntu 22.04 deployment. The original deployment's initial full backup was still in progress at release preparation. Sample round trips and local integration tests do not establish that an entire server can already be restored. This is an independent project, not an official Drime product.
 
 Features:
 
@@ -33,7 +33,7 @@ sudo python3 scripts/configure.py
 
 The installer does **not** start uploading. The configurator asks for a dedicated workspace ID, account email, hidden API token and source roots. Review the configuration and Drime alert-policy requirements in the Russian README, run its read-only preflight, then enable `ubuntu-drime-backup.service`.
 
-The default clock is **Europe/Moscow**. From 07:00 to 19:00, five accumulated errors latch a stop; critical failures stop immediately. At night, failures are logged and retried without a new automatic persistent latch. Manual stops and prior daytime latches persist. These fixed day boundaries are part of v0.1.2's documented behavior.
+The default clock is **Europe/Moscow**. From 07:00 to 19:00, five accumulated errors latch a stop; critical failures stop immediately. At night, failures are logged and retried without a new automatic persistent latch. Manual stops and prior daytime latches persist. These fixed day boundaries are part of v0.1.3's documented behavior.
 
 ```bash
 sudo systemctl status ubuntu-drime-backup
@@ -48,3 +48,7 @@ Use one writer per destination tree. Never treat an active process, a sample has
 MIT license; rclone attribution and its MIT license are included in `NOTICE` and `licenses/`.
 
 Version 0.1.1 verifies an ambiguous history move by the original object ID in the exact destination before continuing. Durable incident membership links error summaries to actual upload confirmations, including across restarts; unrelated successful uploads never resolve another batch. See the operations guide for the migration and verification details.
+
+### Stalled-command recovery (0.1.3)
+
+Distinct `Making directory` events count as traversal progress, never as upload acknowledgements. Directory batches default to 16 entries. After 600 seconds without progress, the child is terminated and a durable 600-second maintenance pause begins, both day and night. After a read-only cloud preflight, retries use at most 16 entries and two transfers until a successful batch. Manual stops, existing safety latches and error counters are never cleared. Failed probes reschedule and actual errors retain the daytime budget. Process crashes, command-duration limits and security failures retain their prior policies. The panel shows the next attempt, and intentional pauses are excluded from ETA samples.

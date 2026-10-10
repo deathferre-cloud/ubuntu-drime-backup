@@ -59,7 +59,12 @@ def explain_error(message):
     if 'error limit reached' in text or 'error budget exhausted' in text:
         return ('Набралось 5 дневных ошибок с последнего ручного сброса. Сработала защита и остановила копирование. '
                 'Сначала разберите предыдущие ошибки в таблице и устраните причину, затем нажмите «Снять блокировку и запустить».')
-    if any(word in text for word in ('no observable progress','stall deadline','maximum command duration')):
+    if 'scheduled recovery' in text or 'no observable progress' in text or 'stall deadline' in text:
+        return ('Клиент долго не показывал наблюдаемого продвижения. У пачек каталогов байтовые счётчики остаются нулевыми даже во время работы. '
+                'Теперь каталоги отправляются небольшими группами. При повторном зависании завершается только текущая команда, очередь сохраняется, '
+                'затем следует пауза 10 минут, проверка доступа к Drime и повтор небольшой пачки. Ручной стоп и защитные блокировки не снимаются. '
+                'Старые записи SAFETY STOP относятся к прежнему правилу; фактический режим и время повтора показаны в текущем состоянии.')
+    if 'maximum command duration' in text:
         return ('Копирование слишком долго не показывало продвижения либо команда превысила допустимую длительность. '
                 'Служба прервала её, чтобы не оставлять зависший процесс. Днём это блокирует службу, ночью будет повтор. '
                 'Нужно проверить доступность Drime, сеть и размер проблемной партии.')
@@ -198,13 +203,14 @@ class ErrorResolutions:
                     detail='Подтверждено при разборе '+moscow_time(reviewed_at)+' МСК. '+sanitize(reason))
         except (ValueError,TypeError,AttributeError): pass
         incident=re.search(r'\[incident_id=([0-9a-f]{32})\]',message)
-        if incident:
+        incident_id=incident[1] if incident else review.get('incident_id') if isinstance(review,dict) else None
+        if isinstance(incident_id,str) and re.fullmatch(r'[0-9a-f]{32}',incident_id):
             try:
                 if self.db is None:
                     self.db=sqlite3.connect((ROOT/'journal.sqlite3').as_uri()+'?mode=ro',uri=True,timeout=1)
                     self.db.execute('PRAGMA query_only=ON')
-                row=self.db.execute('SELECT resolved_at,error FROM transfer_incidents WHERE id=?',(incident[1],)).fetchone()
-                total,remaining=self.db.execute('SELECT COUNT(*),SUM(resolved_at IS NULL) FROM incident_files WHERE incident_id=?',(incident[1],)).fetchone()
+                row=self.db.execute('SELECT resolved_at,error FROM transfer_incidents WHERE id=?',(incident_id,)).fetchone()
+                total,remaining=self.db.execute('SELECT COUNT(*),SUM(resolved_at IS NULL) FROM incident_files WHERE incident_id=?',(incident_id,)).fetchone()
                 if row and row[1] and total and not remaining and row[0]:
                     return dict(resolved=True,label='Исправлена',detail='Повтор этой пачки подтверждён '+moscow_time(iso_microseconds(row[0]))+
                         ' МСК. Все её файлы получили подтверждение отправки. Новые изменения файлов учитываются отдельно.')
@@ -274,7 +280,7 @@ def status():
     guard = read_json(ROOT/'safety-state.json')
     # Only fixed-unit, bounded, sanitized errors are exposed after authentication.
     selected = {k: state.get(k) for k in ('updated_at','phase','current_files','pending_files',
-        'current_bytes','source_bytes','pending_directories','initial_copy_complete','active','last_operation_error','error_files')}
+        'current_bytes','source_bytes','pending_directories','initial_copy_complete','active','last_operation_error','error_files','repair')}
     selected.update(service=live,day_errors=guard.get('count',0),night_errors=guard.get('night_errors',0),
         safety_stop=(ROOT/'SAFETY_STOP.json').exists(),manual_stop=(ROOT/'MANUAL_STOP.json').exists(),
         reason=guard.get('reason'),error_log=recent_errors(),
@@ -282,6 +288,15 @@ def status():
     selected['eta']=progress.estimate(read_json(ROOT/'progress-history.json'),
         progress.sample(state,guard,read_json(ROOT/'RUNNING.json'),time.time()),
         live.get('ActiveState')=='active',selected['safety_stop'] or selected['manual_stop'],time.time(),state.get('scan_errors',0))
+    repair=selected.get('repair')
+    if repair:
+        when=repair.get('retry_at')
+        repair['retry_msk']=dt.datetime.fromtimestamp(when,ZoneInfo('Europe/Moscow')).strftime('%Y.%m.%d — %H:%M:%S') if when else None
+        repair['label']=('Пауза восстановления: повтор '+repair['retry_msk']+' МСК') if when else 'Проверка восстановления: повтор небольшой пачки'
+        if selected['safety_stop'] or selected['manual_stop'] or live.get('ActiveState')!='active':
+            repair['label']='Автоповтор приостановлен: служба остановлена или заблокирована'
+        else:
+            selected['eta']=dict(state='repair',label=repair['label'],finish_msk=None,detail='')
     return selected
 
 
